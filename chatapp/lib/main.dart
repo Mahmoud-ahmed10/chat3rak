@@ -11,10 +11,10 @@ void main() async {
   await Permission.camera.request();
   await Permission.photos.request();
   await Permission.storage.request();
-  runApp(MyApp());
+  runApp(chat3rak());
 }
 
-class MyApp extends StatelessWidget {
+class chat3rak extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
