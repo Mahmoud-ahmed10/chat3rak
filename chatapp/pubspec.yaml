@@ -1,10 +1,8 @@
 name: chat_iraq
 description: شات العراق - تطبيق الدردشة الأول في العراق
 
-# منع نشر التطبيق على pub.dev
 publish_to: 'none'
 
-# رقم الإصدار
 version: 1.0.0+1
 
 environment:
@@ -15,31 +13,28 @@ dependencies:
   flutter:
     sdk: flutter
 
-  # التبعيات الأساسية
+  # تبعيات أساسية
   cupertino_icons: ^1.0.6
   
-  # WebView للعرض
-  webview_flutter: ^4.4.2
-  webview_flutter_android: ^3.12.1
-  webview_flutter_wkwebview: ^3.9.4
+  # WebView متقدمة
+  flutter_inappwebview: ^6.0.0
+  permission_handler: ^11.0.0
+
   
-  # إدارة الأذونات
-  permission_handler: ^11.1.0
-  url_launcher: ^6.2.1 
-  
-  # خدمات النظام
+  # خدمات إضافية
+  url_launcher: ^6.2.6
   flutter_launcher_icons: ^0.13.1
+  google_sign_in: ^6.1.5
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^3.0.1
 
-# إعدادات الأيقونات (هتشيل صورة الأيقونة مؤقتًا)
 flutter_launcher_icons:
   android: "launcher_icon"
   ios: true
-  image_path: "assets/icons/app_icon.png" # ← تقدر تشيل السطر ده لو مش ناوي تستخدم أيقونة حالياً
+  image_path: "assets/icons/app_icon.png"
   min_sdk_android: 21
   web:
     generate: false
@@ -50,38 +45,3 @@ flutter_launcher_icons:
 
 flutter:
   uses-material-design: true
-
-  # تم تعطيل الأصول والخطوط مؤقتًا لتفادي الأخطاء
-  # لو ضفت الصور أو الخطوط لاحقًا، شغّلهم من تاني
-
-  # assets:
-  #   - assets/icons/
-  #   - assets/icons/app_icon.png
-  #   - assets/icons/chat_icon.png
-  #   - assets/icons/logo.png
-  #   - assets/images/
-  #   - assets/images/splash_bg.png
-  #   - assets/images/error_bg.png
-  #   - assets/images/iraq_flag.png
-  #   - assets/fonts/
-
-  # fonts:
-  #   - family: Arabic
-  #     fonts:
-  #       - asset: assets/fonts/NotoSansArabic-Regular.ttf
-  #       - asset: assets/fonts/NotoSansArabic-Bold.ttf
-  #         weight: 700
-  #       - asset: assets/fonts/NotoSansArabic-Light.ttf
-  #         weight: 300
-  #   - family: Amiri
-  #     fonts:
-  #       - asset: assets/fonts/Amiri-Regular.ttf
-  #       - asset: assets/fonts/Amiri-Bold.ttf
-  #         weight: 700
-  #   - family: Cairo
-  #     fonts:
-  #       - asset: assets/fonts/Cairo-Regular.ttf
-  #       - asset: assets/fonts/Cairo-Bold.ttf
-  #         weight: 700
-  #       - asset: assets/fonts/Cairo-Light.ttf
-  #         weight: 300

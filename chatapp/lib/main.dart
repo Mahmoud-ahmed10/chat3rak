@@ -1,10 +1,16 @@
 import 'package:flutter/material.dart';
-import 'package:webview_flutter/webview_flutter.dart';
-import 'package:permission_handler/permission_handler.dart';
 import 'package:flutter/services.dart';
+import 'package:permission_handler/permission_handler.dart';
+import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'dart:io';
 
-void main() {
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await Permission.microphone.request();
+  await Permission.camera.request();
+  await Permission.photos.request();
+  await Permission.storage.request();
   runApp(MyApp());
 }
 
@@ -159,433 +165,88 @@ class ChatWebViewScreen extends StatefulWidget {
 }
 
 class _ChatWebViewScreenState extends State<ChatWebViewScreen> {
-  late WebViewController _webViewController;
+  InAppWebViewController? webViewController;
+  final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
   bool _isLoading = true;
   bool _hasError = false;
-  final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
+  DateTime? _lastBackPressed;
 
-  // متغير لتتبع حالة الرجوع
-  bool _canGoBack = false;
-
-  @override
-  void initState() {
-    super.initState();
-    _initializeWebView();
-  }
-
-  void _initializeWebView() {
-    _webViewController = WebViewController()
-      ..setJavaScriptMode(JavaScriptMode.unrestricted)
-      ..setBackgroundColor(const Color(0x00000000))
-      // تحسين User Agent لدعم Google Sign-In
-      ..setUserAgent(
-          'Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36')
-      ..setNavigationDelegate(
-        NavigationDelegate(
-          onProgress: (int progress) {
-            if (progress == 100) {
-              setState(() {
-                _isLoading = false;
-              });
-            }
-          },
-          onPageStarted: (String url) {
-            setState(() {
-              _isLoading = true;
-              _hasError = false;
-            });
-            print('Page started loading: $url');
-            _updateBackButtonState();
-          },
-          onPageFinished: (String url) {
-            setState(() {
-              _isLoading = false;
-            });
-            print('Page finished loading: $url');
-            _updateBackButtonState();
-
-            // حقن JavaScript محسن
-            _injectGoogleSignInFix();
-          },
-          onWebResourceError: (WebResourceError error) {
-            print('WebView error: ${error.description}');
-            setState(() {
-              _isLoading = false;
-              _hasError = true;
-            });
-          },
-          // معالجة محسنة للروابط
-          onNavigationRequest: (NavigationRequest request) {
-            print('Navigation request: ${request.url}');
-
-            // السماح للروابط العادية
-            if (request.url.contains('chatal3rak.xyz')) {
-              return NavigationDecision.navigate;
-            }
-
-            // التعامل مع روابط Google
-            if (_isGoogleUrl(request.url)) {
-              print('Google URL detected: ${request.url}');
-              _handleGoogleSignIn(request.url);
-              return NavigationDecision.prevent;
-            }
-
-            // للروابط الخارجية الأخرى
-            if (request.url.startsWith('http') &&
-                !request.url.contains('chatal3rak.xyz')) {
-              _launchExternalUrl(request.url);
-              return NavigationDecision.prevent;
-            }
-
-            return NavigationDecision.navigate;
-          },
-        ),
-      )
-      ..loadRequest(Uri.parse('https://www.chatal3rak.xyz/chat/'));
-  }
-
-  // تحديث حالة زر الرجوع
-  Future<void> _updateBackButtonState() async {
-    try {
-      bool canGoBack = await _webViewController.canGoBack();
-      setState(() {
-        _canGoBack = canGoBack;
-      });
-    } catch (e) {
-      print('Error checking back button state: $e');
-    }
-  }
-
-  // معالجة زر الرجوع
-  Future<bool> _handleBackButton() async {
-    try {
-      if (_canGoBack) {
-        await _webViewController.goBack();
-        return false; // لا تخرج من التطبيق
-      } else {
-        // إذا لم يكن هناك صفحة للرجوع إليها، اعرض رسالة تأكيد الخروج
-        return await _showExitConfirmationDialog();
-      }
-    } catch (e) {
-      print('Error handling back button: $e');
-      return await _showExitConfirmationDialog();
-    }
-  }
-
-  // حوار تأكيد الخروج
-  Future<bool> _showExitConfirmationDialog() async {
-    return await showDialog<bool>(
-          context: context,
-          builder: (BuildContext context) {
-            return AlertDialog(
-              title: Text(
-                'تأكيد الخروج',
-                textAlign: TextAlign.center,
-                style: TextStyle(fontWeight: FontWeight.bold),
-              ),
-              content: Text(
-                'هل تريد الخروج من التطبيق؟',
-                textAlign: TextAlign.center,
-              ),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.of(context).pop(false),
-                  child: Text('إلغاء'),
-                ),
-                TextButton(
-                  onPressed: () => Navigator.of(context).pop(true),
-                  child: Text('خروج'),
-                ),
-              ],
-            );
-          },
-        ) ??
-        false;
-  }
-
-  // تحقق محسن من روابط Google
-  bool _isGoogleUrl(String url) {
-    List<String> googleDomains = [
-      'accounts.google.com',
-      'oauth2.googleapis.com',
-      'www.googleapis.com',
-      'signin.googleapis.com',
-      'accounts.youtube.com'
-    ];
-
-    return googleDomains.any((domain) => url.contains(domain)) ||
-        url.contains('oauth') ||
-        url.contains('google') && url.contains('auth');
-  }
-
-  // معالج محسن لتسجيل الدخول بـ Google
-  void _handleGoogleSignIn(String url) async {
-    print('Handling Google Sign-In: $url');
-
-    // عرض رسالة للمستخدم
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('جاري فتح تسجيل الدخول بـ Google...'),
-        duration: Duration(seconds: 2),
-        backgroundColor: Colors.blue[800],
-      ),
-    );
-
-    try {
-      final Uri uri = Uri.parse(url);
-      bool launched = await launchUrl(
-        uri,
-        mode: LaunchMode.externalApplication,
-        webViewConfiguration: WebViewConfiguration(
-          enableJavaScript: true,
-          enableDomStorage: true,
-        ),
-      );
-
-      if (launched) {
-        print('Successfully launched Google Sign-In');
-
-        // انتظار قصير ثم إعادة تحميل الصفحة
-        Future.delayed(Duration(seconds: 3), () {
-          if (mounted) {
-            _refreshPage();
-          }
-        });
-      } else {
-        print('Failed to launch Google Sign-In');
-        _showManualSignInDialog();
-      }
-    } catch (e) {
-      print('Error launching Google Sign-In: $e');
-      _showManualSignInDialog();
-    }
-  }
-
-  // فتح روابط خارجية
-  void _launchExternalUrl(String url) async {
-    try {
-      final Uri uri = Uri.parse(url);
-      await launchUrl(uri, mode: LaunchMode.externalApplication);
-    } catch (e) {
-      print('Error launching external URL: $e');
-    }
-  }
-
-  // حقن JavaScript محسن
-  void _injectGoogleSignInFix() {
-    String jsCode = '''
-      console.log('Injecting Google Sign-In fix...');
-      
-      // تحسين User Agent
-      if (navigator.userAgent.indexOf('wv') !== -1) {
-        Object.defineProperty(navigator, 'userAgent', {
-          get: function() {
-            return 'Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36';
-          }
-        });
-      }
-      
-      // إزالة WebView indicators
-      Object.defineProperty(navigator, 'webdriver', {
-        get: function() { return false; }
-      });
-      
-      // تحسين Google Sign-In
-      function enhanceGoogleSignIn() {
-        // البحث عن أزرار Google Sign-In
-        const selectors = [
-          'button[data-provider="google"]',
-          'a[href*="google"]',
-          'button[class*="google"]',
-          'div[data-provider="google"]',
-          '[role="button"][aria-label*="Google"]',
-          'button:contains("Google")',
-          'a:contains("Google")'
-        ];
-        
-        selectors.forEach(selector => {
-          try {
-            const elements = document.querySelectorAll(selector);
-            elements.forEach(element => {
-              console.log('Found Google sign-in element:', element);
-              
-              element.addEventListener('click', function(e) {
-                console.log('Google sign-in clicked');
-                // السماح للحدث بالتنفيذ بشكل طبيعي
-                // لا نمنعه هنا
-              });
-            });
-          } catch (error) {
-            console.log('Error processing selector:', selector, error);
-          }
-        });
-      }
-      
-      // تشغيل التحسينات
-      if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', enhanceGoogleSignIn);
-      } else {
-        enhanceGoogleSignIn();
-      }
-      
-      // مراقبة التغييرات في DOM
-      const observer = new MutationObserver(function(mutations) {
-        mutations.forEach(function(mutation) {
-          if (mutation.addedNodes.length > 0) {
-            enhanceGoogleSignIn();
-          }
-        });
-      });
-      
-      observer.observe(document.body, {
-        childList: true,
-        subtree: true
-      });
-      
-      console.log('Google Sign-In enhancement complete');
-    ''';
-
-    _webViewController.runJavaScript(jsCode);
-  }
-
-  // حوار إرشادي للتسجيل الدليل
-  void _showManualSignInDialog() {
-    showDialog(
-      context: context,
-      builder: (BuildContext context) {
-        return AlertDialog(
-          title: Row(
-            children: [
-              Icon(Icons.info_outline, color: Colors.blue[800]),
-              SizedBox(width: 10),
-              Expanded(
-                child: Text(
-                  'تسجيل الدخول بـ Google',
-                  style: TextStyle(fontWeight: FontWeight.bold),
-                ),
-              ),
-            ],
-          ),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                'إذا لم يعمل تسجيل الدخول بـ Google تلقائياً، يمكنك:',
-                style: TextStyle(fontWeight: FontWeight.w500),
-              ),
-              SizedBox(height: 15),
-              _buildInstructionStep('1', 'فتح الموقع في المتصفح الخارجي'),
-              _buildInstructionStep('2', 'تسجيل الدخول بحساب Google'),
-              _buildInstructionStep('3', 'العودة للتطبيق وتحديث الصفحة'),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(),
-              child: Text('موافق'),
-            ),
-            ElevatedButton(
-              onPressed: () {
-                Navigator.of(context).pop();
-                _openInExternalBrowser();
-              },
-              style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.blue[800],
-                foregroundColor: Colors.white,
-              ),
-              child: Text('فتح في المتصفح'),
-            ),
-          ],
-        );
-      },
-    );
-  }
-
-  Widget _buildInstructionStep(String number, String text) {
-    return Padding(
-      padding: EdgeInsets.symmetric(vertical: 4),
-      child: Row(
-        children: [
-          Container(
-            width: 24,
-            height: 24,
-            decoration: BoxDecoration(
-              color: Colors.blue[800],
-              shape: BoxShape.circle,
-            ),
-            child: Center(
-              child: Text(
-                number,
-                style: TextStyle(
-                  color: Colors.white,
-                  fontSize: 12,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-            ),
-          ),
-          SizedBox(width: 10),
-          Expanded(child: Text(text)),
-        ],
-      ),
-    );
-  }
-
-  // فتح الموقع في متصفح خارجي
-  Future<void> _openInExternalBrowser() async {
-    final Uri uri = Uri.parse('https://www.chatal3rak.xyz/chat/');
-    try {
-      bool launched = await launchUrl(
-        uri,
-        mode: LaunchMode.externalApplication,
-      );
-
-      if (launched) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('تم فتح الموقع في المتصفح الخارجي'),
-            backgroundColor: Colors.green,
-          ),
-        );
-      }
-    } catch (e) {
-      print('خطأ في فتح المتصفح: $e');
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('حدث خطأ في فتح المتصفح'),
-          backgroundColor: Colors.red,
-        ),
-      );
-    }
-  }
-
-  Future<void> _refreshPage() async {
+  void _refreshPage() {
     setState(() {
       _isLoading = true;
       _hasError = false;
     });
+    webViewController?.reload();
+  }
 
-    try {
-      await _webViewController.reload();
-      _updateBackButtonState();
+  Future<void> _openInExternalBrowser() async {
+    final url = await webViewController?.getUrl();
+    if (url != null) {
+      if (await canLaunchUrl(url)) {
+        await launchUrl(url, mode: LaunchMode.externalApplication);
+      }
+    }
+  }
+
+  Future<NavigationActionPolicy> _handleNavigationAction(
+      InAppWebViewController controller,
+      NavigationAction navigationAction) async {
+    final url = navigationAction.request.url.toString();
+
+    // فتح روابط Google في المتصفح الخارجي
+    if (url.contains('accounts.google.com') ||
+        url.contains('oauth.googleusercontent.com') ||
+        url.contains('google.com/oauth') ||
+        url.contains('googleapis.com/oauth')) {
+      // فتح الرابط في المتصفح الخارجي
+      if (await canLaunchUrl(Uri.parse(url))) {
+        await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
+      }
+
+      // منع فتح الرابط في WebView
+      return NavigationActionPolicy.CANCEL;
+    }
+
+    // السماح بباقي الروابط
+    return NavigationActionPolicy.ALLOW;
+  }
+
+  // معالج زر الرجوع
+  Future<bool> _onWillPop() async {
+    // التحقق من وجود صفحات سابقة في WebView
+    if (webViewController != null) {
+      bool canGoBack = await webViewController!.canGoBack();
+
+      if (canGoBack) {
+        // الرجوع للصفحة السابقة في WebView
+        await webViewController!.goBack();
+        return false; // منع الخروج من التطبيق
+      }
+    }
+
+    // إذا لم تكن هناك صفحات سابقة، اسأل المستخدم عن الخروج
+    DateTime now = DateTime.now();
+    if (_lastBackPressed == null ||
+        now.difference(_lastBackPressed!) > Duration(seconds: 2)) {
+      _lastBackPressed = now;
 
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('تم تحديث الصفحة'),
-          duration: Duration(seconds: 1),
-          backgroundColor: Colors.green,
+          content: Text('اضغط مرة أخرى للخروج من التطبيق'),
+          duration: Duration(seconds: 2),
+          backgroundColor: Colors.blue[800],
         ),
       );
-    } catch (e) {
-      print('Error refreshing page: $e');
+      return false; // منع الخروج
     }
+
+    return true; // السماح بالخروج
   }
 
   @override
   Widget build(BuildContext context) {
     return WillPopScope(
-      onWillPop: _handleBackButton,
+      onWillPop: _onWillPop,
       child: Scaffold(
         key: _scaffoldKey,
         appBar: AppBar(
@@ -611,13 +272,187 @@ class _ChatWebViewScreenState extends State<ChatWebViewScreen> {
             ),
           ],
         ),
-        drawer: _buildDrawer(context),
+        drawer: Drawer(
+          child: ListView(
+            padding: EdgeInsets.zero,
+            children: [
+              DrawerHeader(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    colors: [Colors.blue[800]!, Colors.blue[600]!],
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                  ),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Icon(
+                      Icons.chat_bubble_outline,
+                      size: 50,
+                      color: Colors.white,
+                    ),
+                    SizedBox(height: 10),
+                    Text(
+                      'شات العراق',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 24,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    Text(
+                      'موقع الدردشة الأول في العراق',
+                      style: TextStyle(
+                        color: Colors.white70,
+                        fontSize: 14,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              ListTile(
+                leading: Icon(Icons.home, color: Colors.blue[800]),
+                title: Text('الصفحة الرئيسية'),
+                onTap: () {
+                  Navigator.pop(context);
+                  webViewController?.loadUrl(
+                    urlRequest: URLRequest(
+                      url: WebUri('https://www.chatal3rak.xyz/'),
+                    ),
+                  );
+                },
+              ),
+              ListTile(
+                leading: Icon(Icons.chat, color: Colors.blue[800]),
+                title: Text('الدردشة'),
+                onTap: () {
+                  Navigator.pop(context);
+                  webViewController?.loadUrl(
+                    urlRequest: URLRequest(
+                      url: WebUri('https://www.chatal3rak.xyz/chat/'),
+                    ),
+                  );
+                },
+              ),
+              Divider(),
+              ListTile(
+                leading: Icon(Icons.privacy_tip, color: Colors.green),
+                title: Text('سياسة الخصوصية'),
+                onTap: () {
+                  Navigator.pop(context);
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (context) => PrivacyPolicyScreen(),
+                    ),
+                  );
+                },
+              ),
+              ListTile(
+                leading: Icon(Icons.description, color: Colors.orange),
+                title: Text('شروط الاستخدام'),
+                onTap: () {
+                  Navigator.pop(context);
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (context) => TermsOfServiceScreen(),
+                    ),
+                  );
+                },
+              ),
+              ListTile(
+                leading: Icon(Icons.info, color: Colors.purple),
+                title: Text('حول التطبيق'),
+                onTap: () {
+                  Navigator.pop(context);
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (context) => AboutScreen(),
+                    ),
+                  );
+                },
+              ),
+              Divider(),
+              ListTile(
+                leading: Icon(Icons.exit_to_app, color: Colors.red),
+                title: Text('الخروج'),
+                onTap: () {
+                  _showExitDialog(context);
+                },
+              ),
+            ],
+          ),
+        ),
         body: Stack(
           children: [
             if (_hasError)
               _buildErrorWidget()
             else
-              WebViewWidget(controller: _webViewController),
+              InAppWebView(
+                initialUrlRequest: URLRequest(
+                  url: WebUri('https://www.chatal3rak.xyz/chat/'),
+                ),
+                initialOptions: InAppWebViewGroupOptions(
+                  crossPlatform: InAppWebViewOptions(
+                    mediaPlaybackRequiresUserGesture: false,
+                    javaScriptEnabled: true,
+                    userAgent:
+                        'Mozilla/5.0 (Linux; Android 10; SM-A205U) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.120 Mobile Safari/537.36',
+                    clearCache: false,
+                    cacheEnabled: true,
+                    supportZoom: false,
+                  ),
+                  android: AndroidInAppWebViewOptions(
+                    useHybridComposition: true,
+                    thirdPartyCookiesEnabled: true,
+                    allowContentAccess: true,
+                    allowFileAccess: true,
+                    useWideViewPort: true,
+                    domStorageEnabled: true,
+                  ),
+                  ios: IOSInAppWebViewOptions(
+                    allowsInlineMediaPlayback: true,
+                    allowsBackForwardNavigationGestures: true,
+                  ),
+                ),
+                androidOnPermissionRequest:
+                    (controller, origin, resources) async {
+                  return PermissionRequestResponse(
+                    resources: resources,
+                    action: PermissionRequestResponseAction.GRANT,
+                  );
+                },
+                shouldOverrideUrlLoading: (controller, navigationAction) async {
+                  return _handleNavigationAction(controller, navigationAction);
+                },
+                onWebViewCreated: (controller) {
+                  webViewController = controller;
+                },
+                onLoadStart: (controller, url) {
+                  setState(() {
+                    _isLoading = true;
+                    _hasError = false;
+                  });
+                },
+                onLoadStop: (controller, url) {
+                  setState(() {
+                    _isLoading = false;
+                  });
+                },
+                onLoadError: (controller, url, code, message) {
+                  setState(() {
+                    _isLoading = false;
+                    _hasError = true;
+                  });
+                },
+                onConsoleMessage: (controller, consoleMessage) {
+                  // طباعة رسائل وحدة التحكم للتشخيص
+                  print("Console: ${consoleMessage.message}");
+                },
+              ),
             if (_isLoading)
               Container(
                 color: Colors.white,
@@ -696,192 +531,7 @@ class _ChatWebViewScreenState extends State<ChatWebViewScreen> {
     );
   }
 
-  Widget _buildDrawer(BuildContext context) {
-    return Drawer(
-      child: ListView(
-        padding: EdgeInsets.zero,
-        children: [
-          DrawerHeader(
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                colors: [Colors.blue[800]!, Colors.blue[600]!],
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-              ),
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Icon(
-                  Icons.chat_bubble_outline,
-                  size: 50,
-                  color: Colors.white,
-                ),
-                SizedBox(height: 10),
-                Text(
-                  'شات العراق',
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontSize: 24,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-                Text(
-                  'موقع الدردشة الأول',
-                  style: TextStyle(
-                    color: Colors.white70,
-                    fontSize: 14,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          ListTile(
-            leading: Icon(Icons.home, color: Colors.blue[800]),
-            title: Text(
-              'الصفحة الرئيسية',
-              style: TextStyle(fontSize: 16),
-            ),
-            onTap: () {
-              Navigator.pop(context);
-              _webViewController
-                  .loadRequest(Uri.parse('https://www.chatal3rak.xyz/chat/'));
-            },
-          ),
-          ListTile(
-            leading: Icon(Icons.open_in_browser, color: Colors.green[700]),
-            title: Text(
-              'فتح في المتصفح',
-              style: TextStyle(fontSize: 16),
-            ),
-            onTap: () {
-              Navigator.pop(context);
-              _openInExternalBrowser();
-            },
-          ),
-          Divider(),
-          ListTile(
-            leading: Icon(Icons.privacy_tip, color: Colors.green[700]),
-            title: Text(
-              'سياسة الخصوصية',
-              style: TextStyle(fontSize: 16),
-            ),
-            onTap: () {
-              Navigator.pop(context);
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (context) => PolicyScreen(
-                    title: 'سياسة الخصوصية',
-                    content: _getPrivacyPolicyContent(),
-                  ),
-                ),
-              );
-            },
-          ),
-          ListTile(
-            leading: Icon(Icons.description, color: Colors.orange[700]),
-            title: Text(
-              'شروط الاستخدام',
-              style: TextStyle(fontSize: 16),
-            ),
-            onTap: () {
-              Navigator.pop(context);
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (context) => PolicyScreen(
-                    title: 'شروط الاستخدام',
-                    content: _getTermsContent(),
-                  ),
-                ),
-              );
-            },
-          ),
-          Divider(),
-          ListTile(
-            leading: Icon(Icons.info, color: Colors.blue[700]),
-            title: Text(
-              'حول التطبيق',
-              style: TextStyle(fontSize: 16),
-            ),
-            onTap: () {
-              Navigator.pop(context);
-              _showAboutDialog();
-            },
-          ),
-          ListTile(
-            leading: Icon(Icons.exit_to_app, color: Colors.red[700]),
-            title: Text(
-              'خروج',
-              style: TextStyle(fontSize: 16),
-            ),
-            onTap: () {
-              _showExitDialog();
-            },
-          ),
-        ],
-      ),
-    );
-  }
-
-  void _showAboutDialog() {
-    showDialog(
-      context: context,
-      builder: (BuildContext context) {
-        return AlertDialog(
-          title: Text(
-            'حول التطبيق',
-            textAlign: TextAlign.center,
-            style: TextStyle(fontWeight: FontWeight.bold),
-          ),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(
-                Icons.chat_bubble_outline,
-                size: 60,
-                color: Colors.blue[800],
-              ),
-              SizedBox(height: 20),
-              Text(
-                'شات العراق',
-                style: TextStyle(
-                  fontSize: 20,
-                  fontWeight: FontWeight.bold,
-                ),
-                textAlign: TextAlign.center,
-              ),
-              SizedBox(height: 10),
-              Text(
-                'الإصدار 1.2.1',
-                style: TextStyle(
-                  fontSize: 14,
-                  color: Colors.grey[600],
-                ),
-                textAlign: TextAlign.center,
-              ),
-              SizedBox(height: 10),
-              Text(
-                'تطبيق الدردشة الأول في العراق\nيوفر تجربة دردشة آمنة وممتعة\nمع دعم محسن لتسجيل الدخول بـ Google\nودعم متطور لزر الرجوع',
-                textAlign: TextAlign.center,
-                style: TextStyle(fontSize: 14),
-              ),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(),
-              child: Text('موافق'),
-            ),
-          ],
-        );
-      },
-    );
-  }
-
-  void _showExitDialog() {
+  void _showExitDialog(BuildContext context) {
     showDialog(
       context: context,
       builder: (BuildContext context) {
@@ -892,213 +542,496 @@ class _ChatWebViewScreenState extends State<ChatWebViewScreen> {
             style: TextStyle(fontWeight: FontWeight.bold),
           ),
           content: Text(
-            'هل أنت متأكد من رغبتك في الخروج من التطبيق؟',
+            'هل تريد الخروج من التطبيق؟',
             textAlign: TextAlign.center,
           ),
           actions: [
             TextButton(
-              onPressed: () => Navigator.of(context).pop(),
+              onPressed: () {
+                Navigator.of(context).pop();
+              },
               child: Text('إلغاء'),
             ),
             TextButton(
               onPressed: () {
                 Navigator.of(context).pop();
-                Navigator.of(context).pop();
                 SystemNavigator.pop();
               },
-              child: Text('خروج'),
+              child: Text('خروج', style: TextStyle(color: Colors.red)),
             ),
           ],
         );
       },
     );
   }
-
-  String _getPrivacyPolicyContent() {
-    return '''
-سياسة الخصوصية - شات العراق
-
-آخر تحديث: يونيو 2025
-
-نحن في شات العراق نلتزم بحماية خصوصيتك وبياناتك الشخصية. توضح هذه السياسة كيفية جمع واستخدام وحماية المعلومات التي تقدمها لنا.
-
-1. المعلومات التي نجمعها:
-- المعلومات الشخصية التي تقدمها طوعياً (الاسم، البريد الإلكتروني)
-- معلومات الاستخدام والتصفح
-- ملكات تعريف الارتباط (Cookies)
-
-2. كيفية استخدام المعلومات:
-- تحسين تجربة المستخدم
-- توفير خدمات الدردشة
-- الحماية من الاستخدام غير المشروع
-
-3. حماية البيانات:
-- نستخدم تقنيات التشفير المتقدمة
-- لا نشارك بياناتك مع أطراف ثالثة
-- نحافظ على سرية محادثاتك
-
-4. حقوقك:
-- حق الوصول إلى بياناتك
-- حق تصحيح المعلومات
-- حق حذف البيانات
-
-5. التواصل معنا:
-إذا كان لديك أي استفسارات حول سياسة الخصوصية، يرجى التواصل معنا.
-
-نحتفظ بالحق في تحديث هذه السياسة من وقت لآخر.
-''';
-  }
-
-  String _getTermsContent() {
-    return '''
-شروط الاستخدام - شات العراق
-
-آخر تحديث: يونيو 2025
-
-مرحباً بك في شات العراق. باستخدامك لهذا التطبيق، فإنك توافق على الشروط والأحكام التالية:
-
-1. القواعد العامة:
-- يجب أن تكون 18 سنة أو أكثر لاستخدام التطبيق
-- احترام المستخدمين الآخرين في جميع الأوقات
-- عدم نشر محتوى مخالف للقانون أو مسيء
-
-2. السلوك المقبول:
-- استخدام لغة مهذبة ومحترمة
-- عدم التحرش أو التنمر
-- احترام الخصوصية الشخصية للآخرين
-
-3. المحتوى المحظور:
-- المحتوى الإباحي أو الجنسي
-- خطاب الكراهية أو العنصرية
-- المحتوى المخالف للقانون العراقي
-
-4. الخصوصية والأمان:
-- لا تشارك معلوماتك الشخصية الحساسة
-- أبلغ عن أي سلوك مشبوه أو مخالف
-- نحتفظ بالحق في مراقبة المحادثات للحماية
-
-5. المسؤولية:
-- أنت مسؤول عن المحتوى الذي تنشره
-- نحتفظ بالحق في إزالة المحتوى المخالف
-- يمكننا حظر المستخدمين المخالفين
-
-6. التحديثات:
-- نحتفظ بالحق في تحديث هذه الشروط
-- ستتم إعلامك بأي تغييرات مهمة
-
-7. إنهاء الخدمة:
-- يمكنك إنهاء استخدام التطبيق في أي وقت
-- نحتفظ بالحق في إنهاء الخدمة لأي مستخدم
-
-باستخدامك للتطبيق، فإنك تؤكد موافقتك على هذه الشروط.
-
-للاستفسارات، يرجى التواصل معنا.
-''';
-  }
 }
 
-class PolicyScreen extends StatelessWidget {
-  final String title;
-  final String content;
-
-  const PolicyScreen({
-    Key? key,
-    required this.title,
-    required this.content,
-  }) : super(key: key);
-
+class PrivacyPolicyScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text(
-          title,
-          style: TextStyle(fontWeight: FontWeight.bold),
-        ),
-        centerTitle: true,
+        title: Text('سياسة الخصوصية'),
       ),
       body: SingleChildScrollView(
         padding: EdgeInsets.all(16.0),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Container(
-              width: double.infinity,
-              padding: EdgeInsets.all(20),
-              decoration: BoxDecoration(
-                color: Colors.blue[50],
-                borderRadius: BorderRadius.circular(10),
-                border: Border.all(color: Colors.blue[200]!),
-              ),
-              child: Column(
-                children: [
-                  Icon(
-                    title.contains('الخصوصية')
-                        ? Icons.privacy_tip
-                        : Icons.description,
-                    size: 50,
-                    color: Colors.blue[800],
-                  ),
-                  SizedBox(height: 10),
-                  Text(
-                    title,
-                    style: TextStyle(
-                      fontSize: 24,
-                      fontWeight: FontWeight.bold,
-                      color: Colors.blue[800],
-                    ),
-                    textAlign: TextAlign.center,
-                  ),
-                ],
+            Text(
+              'سياسة الخصوصية',
+              style: TextStyle(
+                fontSize: 24,
+                fontWeight: FontWeight.bold,
+                color: Colors.blue[800],
               ),
             ),
             SizedBox(height: 20),
-            Container(
-              width: double.infinity,
-              padding: EdgeInsets.all(20),
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(10),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.grey.withOpacity(0.1),
-                    spreadRadius: 1,
-                    blurRadius: 5,
-                    offset: Offset(0, 2),
-                  ),
-                ],
-              ),
-              child: Text(
-                content,
-                style: TextStyle(
-                  fontSize: 16,
-                  height: 1.6,
-                  color: Colors.grey[800],
-                ),
-                textAlign: TextAlign.right,
-              ),
+            Text(
+              'نحن في شات العراق نحترم خصوصيتك ونلتزم بحماية معلوماتك الشخصية. توضح هذه السياسة كيفية جمع واستخدام وحماية المعلومات التي تقدمها لنا.',
+              style: TextStyle(fontSize: 16, height: 1.5),
             ),
             SizedBox(height: 20),
-            Container(
-              width: double.infinity,
-              child: ElevatedButton(
-                onPressed: () => Navigator.pop(context),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.blue[800],
-                  foregroundColor: Colors.white,
-                  padding: EdgeInsets.symmetric(vertical: 15),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                ),
-                child: Text(
-                  'العودة',
-                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-                ),
+            _buildSection(
+              'جمع المعلومات',
+              'نحن نجمع المعلومات التي تقدمها لنا طوعاً عند:\n'
+                  '• التسجيل في الموقع\n'
+                  '• المشاركة في الدردشة\n'
+                  '• الاتصال بخدمة العملاء\n'
+                  '• استخدام ميزات الموقع المختلفة',
+            ),
+            _buildSection(
+              'استخدام المعلومات',
+              'نستخدم المعلومات المجمعة للأغراض التالية:\n'
+                  '• توفير وتحسين خدماتنا\n'
+                  '• التواصل معك\n'
+                  '• ضمان الأمان والحماية\n'
+                  '• الامتثال للقوانين واللوائح',
+            ),
+            _buildSection(
+              'حماية المعلومات',
+              'نحن نتخذ تدابير أمنية مناسبة لحماية معلوماتك من الوصول غير المصرح به أو التغيير أو الكشف أو التدمير. تشمل هذه التدابير:\n'
+                  '• التشفير الآمن للبيانات\n'
+                  '• جدران الحماية المتقدمة\n'
+                  '• المراقبة المستمرة للأنظمة\n'
+                  '• التدريب المنتظم للموظفين',
+            ),
+            _buildSection(
+              'مشاركة المعلومات',
+              'نحن لا نبيع أو نؤجر أو نشارك معلوماتك الشخصية مع أطراف ثالثة إلا في الحالات التالية:\n'
+                  '• بموافقتك الصريحة\n'
+                  '• للامتثال للقوانين\n'
+                  '• لحماية حقوقنا وحقوق المستخدمين\n'
+                  '• في حالات الطوارئ',
+            ),
+            _buildSection(
+              'حقوقك',
+              'لديك الحق في:\n'
+                  '• الوصول إلى معلوماتك الشخصية\n'
+                  '• تصحيح المعلومات غير الدقيقة\n'
+                  '• حذف معلوماتك الشخصية\n'
+                  '• الاعتراض على معالجة معلوماتك\n'
+                  '• نقل معلوماتك إلى خدمة أخرى',
+            ),
+            _buildSection(
+              'ملفات تعريف الارتباط',
+              'نستخدم ملفات تعريف الارتباط (الكوكيز) لتحسين تجربتك على موقعنا. يمكنك التحكم في هذه الملفات من خلال إعدادات متصفحك.',
+            ),
+            _buildSection(
+              'التحديثات',
+              'قد نقوم بتحديث سياسة الخصوصية هذه من وقت لآخر. سنقوم بإشعارك بأي تغييرات مهمة عبر الموقع أو البريد الإلكتروني.',
+            ),
+            _buildSection(
+              'الاتصال بنا',
+              'إذا كان لديك أي أسئلة حول سياسة الخصوصية هذه، يرجى الاتصال بنا عبر:\n'
+                  '• البريد الإلكتروني: privacy@chatal3rak.xyz\n'
+                  '• الهاتف: +964 XXX XXX XXXX',
+            ),
+            SizedBox(height: 20),
+            Text(
+              'تاريخ آخر تحديث: ${DateTime.now().day}/${DateTime.now().month}/${DateTime.now().year}',
+              style: TextStyle(
+                fontSize: 14,
+                color: Colors.grey[600],
+                fontStyle: FontStyle.italic,
               ),
             ),
           ],
         ),
+      ),
+    );
+  }
+
+  Widget _buildSection(String title, String content) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          title,
+          style: TextStyle(
+            fontSize: 18,
+            fontWeight: FontWeight.bold,
+            color: Colors.blue[700],
+          ),
+        ),
+        SizedBox(height: 8),
+        Text(
+          content,
+          style: TextStyle(fontSize: 16, height: 1.5),
+        ),
+        SizedBox(height: 20),
+      ],
+    );
+  }
+}
+
+class TermsOfServiceScreen extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: Text('شروط الاستخدام'),
+      ),
+      body: SingleChildScrollView(
+        padding: EdgeInsets.all(16.0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'شروط الاستخدام',
+              style: TextStyle(
+                fontSize: 24,
+                fontWeight: FontWeight.bold,
+                color: Colors.blue[800],
+              ),
+            ),
+            SizedBox(height: 20),
+            Text(
+              'مرحباً بك في شات العراق. باستخدامك لهذا الموقع، فإنك توافق على الالتزام بشروط الاستخدام التالية.',
+              style: TextStyle(fontSize: 16, height: 1.5),
+            ),
+            SizedBox(height: 20),
+            _buildSection(
+              'قبول الشروط',
+              'باستخدام موقع شات العراق، فإنك تقر بأنك قد قرأت وفهمت ووافقت على جميع شروط وأحكام الاستخدام هذه.',
+            ),
+            _buildSection(
+              'الاستخدام المقبول',
+              'يجب عليك استخدام الموقع بطريقة مناسبة ومسؤولة. يُمنع منعاً باتاً:\n'
+                  '• استخدام لغة مسيئة أو غير لائقة\n'
+                  '• نشر محتوى مخالف للآداب العامة\n'
+                  '• التحرش بالمستخدمين الآخرين\n'
+                  '• نشر معلومات شخصية للآخرين\n'
+                  '• استخدام الموقع لأغراض تجارية دون إذن\n'
+                  '• محاولة اختراق أو تخريب الموقع',
+            ),
+            _buildSection(
+              'التسجيل والحساب',
+              'عند التسجيل في الموقع، يجب عليك:\n'
+                  '• تقديم معلومات صحيحة ودقيقة\n'
+                  '• الحفاظ على سرية كلمة المرور\n'
+                  '• عدم مشاركة حسابك مع الآخرين\n'
+                  '• إبلاغنا فوراً عن أي استخدام غير مصرح به لحسابك',
+            ),
+            _buildSection(
+              'المحتوى والمسؤولية',
+              'أنت مسؤول عن جميع المحتويات التي تنشرها على الموقع. نحن نحتفظ بالحق في:\n'
+                  '• مراجعة ومراقبة المحتوى\n'
+                  '• حذف أي محتوى مخالف\n'
+                  '• تعليق أو إنهاء الحسابات المخالفة\n'
+                  '• اتخاذ الإجراءات القانونية اللازمة',
+            ),
+            _buildSection(
+              'الخصوصية والأمان',
+              'نحن ملتزمون بحماية خصوصيتك وأمان معلوماتك. يرجى مراجعة سياسة الخصوصية الخاصة بنا لمزيد من التفاصيل.',
+            ),
+            _buildSection(
+              'التعديلات على الشروط',
+              'نحن نحتفظ بالحق في تعديل هذه الشروط في أي وقت. سيتم إشعارك بأي تغييرات مهمة، واستمرارك في استخدام الموقع يعني موافقتك على الشروط المحدثة.',
+            ),
+            _buildSection(
+              'إنهاء الخدمة',
+              'نحن نحتفظ بالحق في إنهاء أو تعليق حسابك في أي وقت إذا:\n'
+                  '• انتهكت شروط الاستخدام\n'
+                  '• تصرفت بطريقة تضر بالموقع أو المستخدمين\n'
+                  '• طلبت إنهاء حسابك بنفسك',
+            ),
+            _buildSection(
+              'إخلاء المسؤولية',
+              'الموقع متاح "كما هو" دون أي ضمانات. نحن غير مسؤولين عن:\n'
+                  '• أي أضرار مباشرة أو غير مباشرة\n'
+                  '• فقدان البيانات أو الأرباح\n'
+                  '• انقطاع الخدمة\n'
+                  '• أخطاء أو عيوب في الموقع',
+            ),
+            _buildSection(
+              'القانون المعمول به',
+              'تخضع هذه الشروط لقوانين جمهورية العراق، وأي نزاع ينشأ عنها سيتم حله في المحاكم العراقية المختصة.',
+            ),
+            _buildSection(
+              'الاتصال بنا',
+              'إذا كان لديك أي أسئلة حول شروط الاستخدام، يرجى الاتصال بنا عبر:\n'
+                  '• البريد الإلكتروني: support@chatal3rak.xyz\n'
+                  '• الهاتف: +964 XXX XXX XXXX',
+            ),
+            SizedBox(height: 20),
+            Text(
+              'تاريخ آخر تحديث: ${DateTime.now().day}/${DateTime.now().month}/${DateTime.now().year}',
+              style: TextStyle(
+                fontSize: 14,
+                color: Colors.grey[600],
+                fontStyle: FontStyle.italic,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSection(String title, String content) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          title,
+          style: TextStyle(
+            fontSize: 18,
+            fontWeight: FontWeight.bold,
+            color: Colors.blue[700],
+          ),
+        ),
+        SizedBox(height: 8),
+        Text(
+          content,
+          style: TextStyle(fontSize: 16, height: 1.5),
+        ),
+        SizedBox(height: 20),
+      ],
+    );
+  }
+}
+
+class AboutScreen extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: Text('حول التطبيق'),
+      ),
+      body: SingleChildScrollView(
+        padding: EdgeInsets.all(16.0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            Icon(
+              Icons.chat_bubble_outline,
+              size: 100,
+              color: Colors.blue[800],
+            ),
+            SizedBox(height: 20),
+            Text(
+              'شات العراق',
+              style: TextStyle(
+                fontSize: 28,
+                fontWeight: FontWeight.bold,
+                color: Colors.blue[800],
+              ),
+            ),
+            SizedBox(height: 10),
+            Text(
+              'موقع الدردشة الأول في العراق',
+              style: TextStyle(
+                fontSize: 18,
+                color: Colors.grey[600],
+              ),
+            ),
+            SizedBox(height: 30),
+            Card(
+              elevation: 4,
+              child: Padding(
+                padding: EdgeInsets.all(16.0),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'معلومات التطبيق',
+                      style: TextStyle(
+                        fontSize: 20,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.blue[700],
+                      ),
+                    ),
+                    SizedBox(height: 15),
+                    _buildInfoRow('الإصدار', '1.0.0'),
+                    _buildInfoRow('تاريخ الإصدار', '2024'),
+                    _buildInfoRow('المطور', 'فريق شات العراق'),
+                    _buildInfoRow('الموقع الإلكتروني', 'www.chatal3rak.xyz'),
+                  ],
+                ),
+              ),
+            ),
+            SizedBox(height: 20),
+            Card(
+              elevation: 4,
+              child: Padding(
+                padding: EdgeInsets.all(16.0),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'عن التطبيق',
+                      style: TextStyle(
+                        fontSize: 20,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.blue[700],
+                      ),
+                    ),
+                    SizedBox(height: 15),
+                    Text(
+                      'شات العراق هو منصة الدردشة الرائدة في العراق، نوفر بيئة آمنة وودية للتواصل والدردشة بين العراقيين من جميع أنحاء العالم.',
+                      style: TextStyle(fontSize: 16, height: 1.5),
+                    ),
+                    SizedBox(height: 15),
+                    Text(
+                      'مميزات التطبيق:',
+                      style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.blue[700],
+                      ),
+                    ),
+                    SizedBox(height: 10),
+                    _buildFeature('دردشة مباشرة وسريعة'),
+                    _buildFeature('واجهة سهلة الاستخدام'),
+                    _buildFeature('حماية وخصوصية عالية'),
+                    _buildFeature('دعم للغة العربية بالكامل'),
+                    _buildFeature('إمكانية مشاركة الصور والملفات'),
+                  ],
+                ),
+              ),
+            ),
+            SizedBox(height: 20),
+            Card(
+              elevation: 4,
+              child: Padding(
+                padding: EdgeInsets.all(16.0),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'تواصل معنا',
+                      style: TextStyle(
+                        fontSize: 20,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.blue[700],
+                      ),
+                    ),
+                    SizedBox(height: 15),
+                    _buildContactInfo(Icons.email, 'البريد الإلكتروني',
+                        'info@chatal3rak.xyz'),
+                    _buildContactInfo(
+                        Icons.phone, 'الهاتف', '+964 XXX XXX XXXX'),
+                    _buildContactInfo(
+                        Icons.web, 'الموقع الإلكتروني', 'www.chatal3rak.xyz'),
+                  ],
+                ),
+              ),
+            ),
+            SizedBox(height: 30),
+            Text(
+              'جميع الحقوق محفوظة © 2024 شات العراق',
+              style: TextStyle(
+                fontSize: 14,
+                color: Colors.grey[600],
+              ),
+              textAlign: TextAlign.center,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildInfoRow(String label, String value) {
+    return Padding(
+      padding: EdgeInsets.symmetric(vertical: 5),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: 100,
+            child: Text(
+              '$label:',
+              style: TextStyle(
+                fontWeight: FontWeight.bold,
+                color: Colors.grey[700],
+              ),
+            ),
+          ),
+          Expanded(
+            child: Text(
+              value,
+              style: TextStyle(fontSize: 16),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildFeature(String feature) {
+    return Padding(
+      padding: EdgeInsets.symmetric(vertical: 3),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(
+            Icons.check_circle,
+            color: Colors.green,
+            size: 20,
+          ),
+          SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              feature,
+              style: TextStyle(fontSize: 16),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildContactInfo(IconData icon, String label, String value) {
+    return Padding(
+      padding: EdgeInsets.symmetric(vertical: 8),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(
+            icon,
+            color: Colors.blue[700],
+            size: 24,
+          ),
+          SizedBox(width: 15),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                label,
+                style: TextStyle(
+                  fontWeight: FontWeight.bold,
+                  color: Colors.grey[700],
+                ),
+              ),
+              Text(
+                value,
+                style: TextStyle(fontSize: 16),
+              ),
+            ],
+          ),
+        ],
       ),
     );
   }
